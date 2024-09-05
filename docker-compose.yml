@@ -1,8 +1,7 @@
-version: '3.1'
 
 services:
   testlink:
-    image: ${IMAGE_NAME}
+    image: kmitendra/test_rail:latest
     ports:
       - "7777:8080"
       - "443:443"
@@ -13,7 +12,7 @@ services:
       - ${VOLUME_DIR_TESTLINK}/logs:/var/testlink/logs
       - ${VOLUME_DIR_TESTLINK}/upload_area:/var/www/html/upload_area
     environment:
-      - IMAGE_NAME=${IMAGE_NAME}
+      - IMAGE_NAME=kmitendra/test_rail:latest
       - VOLUME_DIR_TESTLINK=${VOLUME_DIR_TESTLINK}
 
   mysql_testlink:
@@ -21,7 +20,7 @@ services:
     ports:
       - 3301:3306
     volumes:
-      - ${VOLUME_DIR_MYSQL}:/var/lib/mysql
+      - /Users/abc/mysql/volume:/var/lib/mysql
     environment:
       - MYSQL_ROOT_PASSWORD=rootpassword
       - VOLUME_DIR_MYSQL=${VOLUME_DIR_MYSQL}
