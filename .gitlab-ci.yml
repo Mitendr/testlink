@@ -1,0 +1,141 @@
+# This file is a template, and might need editing before it works on your project.
+# Official language image. Look for the different tagged releases at:
+# https://hub.docker.com/r/library/python/tags/
+image: "python:3.9.12-slim-bullseye"
+#commands to run in the Docker container before starting each job.
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  DOCKER_REGISTRY: $AWS_ECR_REGISTRY/$CI_PROJECT_NAME/main
+  DEPLOY_TYPE: ""
+  SERVER_IP: ""
+  SERVER_KEY: ""
+  ENV_VARIABLES: ""
+  COMMON_ENV_VARIABLES: ""
+  DEPLOY_CLUSTER_NAME: ""
+  DEPLOY_NAMESPACE_NAME: ""
+  IS_CRON: $DEPLOY_IS_CRON
+  RELEASE_TAG: "false"
+  IS_HOTFIX: "false"
+
+workflow:
+  rules:
+    - if:  '$CI_PROJECT_ROOT_NAMESPACE == "credflow" && $CI_COMMIT_BRANCH != "staging" && $CI_COMMIT_BRANCH =~ /build/ && $CI_COMMIT_BRANCH =~ /stg/'
+      variables:
+        DEPLOY_TYPE: "STAGING"
+        SERVER_IP: $STAGING_SERVER_IP
+        SERVER_KEY: $STAGING_SERVER_KEY
+        ENV_VARIABLES: $STAGING_ENV_VARIABLES
+        COMMON_ENV_VARIABLES: $STAGING_COMMON_ENV_VARIABLES
+        IS_FEATURE_BRANCH: "true"
+        DOCKER_REGISTRY: "$AWS_ECR_REGISTRY/$CI_PROJECT_NAME/staging"
+        DOCKER_BUILD_TAG: $CI_COMMIT_BRANCH
+    - if:  '$CI_PROJECT_ROOT_NAMESPACE == "credflow" && $CI_COMMIT_BRANCH != "dev" && $CI_COMMIT_BRANCH =~ /build/'
+      variables:
+        DEPLOY_TYPE: "DEV"
+        SERVER_IP: $DEV_SERVER_IP
+        SERVER_KEY: $DEV_SERVER_KEY
+        ENV_VARIABLES: $DEV_ENV_VARIABLES
+        COMMON_ENV_VARIABLES: $DEV_COMMON_ENV_VARIABLES
+        IS_FEATURE_BRANCH: "true"
+        DOCKER_REGISTRY: "$AWS_ECR_REGISTRY/$CI_PROJECT_NAME/dev"
+        DOCKER_BUILD_TAG: $CI_COMMIT_BRANCH
+    - if:  '$CI_PROJECT_ROOT_NAMESPACE == "credflow" && $CI_COMMIT_BRANCH == "dev"'
+      variables:
+        DEPLOY_TYPE: "DEV"
+        SERVER_IP: $DEV_SERVER_IP
+        SERVER_KEY: $DEV_SERVER_KEY
+        ENV_VARIABLES: $DEV_ENV_VARIABLES
+        COMMON_ENV_VARIABLES: $DEV_COMMON_ENV_VARIABLES
+    - if:  '$CI_PROJECT_ROOT_NAMESPACE == "credflow" && $CI_COMMIT_BRANCH == "staging"'
+      variables:
+        DEPLOY_TYPE: "STAGING"
+        SERVER_IP: $STAGING_SERVER_IP
+        SERVER_KEY: $STAGING_SERVER_KEY
+        ENV_VARIABLES: $STAGING_ENV_VARIABLES
+        COMMON_ENV_VARIABLES: $MASTER_COMMON_ENV_VARIABLES
+        DOCKER_REGISTRY: "$AWS_ECR_REGISTRY/$CI_PROJECT_NAME/staging"
+    - if:  '$CI_PROJECT_ROOT_NAMESPACE == "credflow" && $CI_COMMIT_BRANCH == "main"'
+      variables:
+        DEPLOY_TYPE: "MASTER"
+        SERVER_IP: ""
+        SERVER_KEY: $MASTER_SERVER_KEY
+        ENV_VARIABLES: $MASTER_ENV_VARIABLES
+        COMMON_ENV_VARIABLES: $MASTER_COMMON_ENV_VARIABLES
+    - if:  '$CI_PROJECT_ROOT_NAMESPACE == "credflow" && $CI_COMMIT_BRANCH == "staging_prod"'
+      variables:
+        DEPLOY_TYPE: "STAGING_PROD"
+        SERVER_IP: ""
+        SERVER_KEY: $STAGING_PROD_SERVER_KEY
+        ENV_VARIABLES: $STAGING_PROD_ENV_VARIABLES
+        COMMON_ENV_VARIABLES: $STAGING_PROD_COMMON_ENV_VARIABLES
+        DEPLOY_CLUSTER_NAME: "thanos"
+        DEPLOY_NAMESPACE_NAME: "noddy"
+    - when: always
+
+cache:
+  paths:
+    - .cache/pip
+    - venv/
+
+before_script:
+  - python --version # For debugging
+  - pip install virtualenv
+  - virtualenv venv
+  - source venv/bin/activate
+
+stages:
+  - install_dependencies
+  - push
+
+install_dependencies:
+  stage: install_dependencies
+  image: python:3.9.12-slim-bullseye
+  before_script:
+    - |-
+        if [[ $DEPLOY_TYPE != "" ]]; then
+          touch .env
+          printf "%s" "$COMMON_ENV_VARIABLES" > .env
+          printf "%s" "$ENV_VARIABLES" >> .env
+        fi
+  script:
+    - apt update
+    - apt install -y libpq-dev gcc jq libpq5
+    - python --version # For debugging
+    - pip install virtualenv
+    - virtualenv venv
+    - source venv/bin/activate
+    - pip install -r requirements.txt
+    - printf "%s" $(jq '.version' package.json | tr -d '"') > version.v
+  artifacts:
+    paths:
+      - venv/
+      - version.v
+  rules:
+    - if: '(($DEPLOY_TYPE != "" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == $CI_DEFAULT_BRANCH) && $RELEASE_TAG == "false")|| $IS_HOTFIX == "true"'
+      when: always
+
+
+push_to_ecr:
+  stage: push
+  image: 841835653837.dkr.ecr.ap-south-1.amazonaws.com/aws-docker:2.0.0
+  services:
+    - name: docker:dind
+  before_script:
+    - aws --version
+    - docker --version
+    - aws ecr get-login-password | docker login --username AWS --password-stdin $AWS_ECR_REGISTRY
+  script:
+    - touch .env
+    - printf "%s" "$COMMON_ENV_VARIABLES" > .env
+    - printf "%s" "$ENV_VARIABLES" >> .env
+    - touch ./creds/credflow-analytics.json
+    - printf "%s" "$SP_CREDENTIALS" > ./creds/credflow-analytics.json
+    - VERSION=$(cat version.v)
+    - docker build -t $DOCKER_REGISTRY .
+    - docker tag $DOCKER_REGISTRY $DOCKER_REGISTRY:$VERSION
+    - docker push $DOCKER_REGISTRY
+    - docker push $DOCKER_REGISTRY:$VERSION
+  rules:
+    - if: '($DEPLOY_TYPE != "" && $RELEASE_TAG == "false")|| $IS_HOTFIX == "true"'
+      when: on_success
