@@ -78,10 +78,6 @@ build:
     - docker --version
     - aws ecr get-login-password | docker login --username AWS --password-stdin $AWS_ECR_REGISTRY
   script:
-    - touch .env
-    - rm .env
-    - touch .env
-    - VERSION=$(cat version.v)
     - docker build -t $DOCKER_REGISTRY .
     - docker tag $DOCKER_REGISTRY $DOCKER_REGISTRY:$VERSION
     - docker push $DOCKER_REGISTRY
